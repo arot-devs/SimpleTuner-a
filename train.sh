@@ -3,22 +3,25 @@
 # Pull config from config.env
 [ -f "config/config.env" ] && source config/config.env
 
-# If the user has not provided VENV_PATH, we will assume $(pwd)/.venv
-if [ -z "${VENV_PATH}" ]; then
-    # what if we have VIRTUAL_ENV? use that instead
-    if [ -n "${VIRTUAL_ENV}" ]; then
-        export VENV_PATH="${VIRTUAL_ENV}"
-    elif [ -d "$PWD/.venv" ]; then
-        export VENV_PATH="$PWD/.venv"
-    elif [ -d "$PWD/venv" ]; then
-        export VENV_PATH="$PWD/venv"
+# Skip venv activation if using conda
+if [ -z "${CONDA_PREFIX}" ]; then
+    if [ -z "${VENV_PATH}" ]; then
+        if [ -n "${VIRTUAL_ENV}" ]; then
+            export VENV_PATH="${VIRTUAL_ENV}"
+        elif [ -d "$PWD/.venv" ]; then
+            export VENV_PATH="$PWD/.venv"
+        elif [ -d "$PWD/venv" ]; then
+            export VENV_PATH="$PWD/venv"
+        fi
     fi
+
+    if [[ -z "${VIRTUAL_ENV}" && -n "${VENV_PATH}" ]]; then
+        source "${VENV_PATH}/bin/activate"
+    fi
+else
+    echo "Detected Conda environment: ${CONDA_PREFIX}"
 fi
 
-# If a venv hasn't already been activated, activate it now
-if [[ -z "${VIRTUAL_ENV}" ]]; then
-    source "${VENV_PATH}/bin/activate"
-fi
 
 if [ -z "${DISABLE_LD_OVERRIDE}" ]; then
     export NVJITLINK_PATH="$(find "${VENV_PATH}" -name nvjitlink -type d)/lib"
