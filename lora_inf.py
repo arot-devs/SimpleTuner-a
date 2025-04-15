@@ -24,9 +24,10 @@ model_id = "HiDream-ai/HiDream-I1-Full"
 
 # --- LoRA setup ---
 lora_options = {
-    "anime 400 run4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run04/pytorch_lora_weights.safetensors",
-    "nai artist run5": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run05-nai4/pytorch_lora_weights.safetensors",
-    "run06-nai4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run06-nai4/pytorch_lora_weights.safetensors",}
+    # "anime 400 run4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run04/pytorch_lora_weights.safetensors",
+    # "nai artist run5": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run05-nai4/pytorch_lora_weights.safetensors",
+    # "run06-nai4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run06-nai4/pytorch_lora_weights.safetensors",
+    "run07-higherlr-n4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run07-nai4-longer-higherlr/checkpoint-1200/ema/ema_model.safetensors",}
 
 save_dir = "output/gradio_3".rstrip('/')
 
@@ -159,26 +160,26 @@ demo = gr.Interface(
     fn=generate_image,
     inputs=[
         gr.Textbox(label="Prompt", lines=4,
-                   value="an anime illustration of hatsune miku, 1girl, white gloves, dress, cat ears, maid outfit, indoors, cat ears"),
+                   value="an anime illustration of hatsune miku, 1girl, white gloves, dress, cat ears, maid outfit, indoors, holding a sign that writes 'HiDream', trending on pxiv"),
         gr.Textbox(label="Negative Prompt", lines=2,
                    value="ugly, cropped, blurry, low-quality, mediocre average"),
-        gr.Slider(minimum=256, maximum=1536,
-                  step=64, value=768, label="Width"),
-        gr.Slider(minimum=256, maximum=1536, step=64,
-                  value=1280, label="Height"),
+        gr.Slider(minimum=256, maximum=2048,
+                  step=64, value=832, label="Width"),
+        gr.Slider(minimum=256, maximum=2048, step=64,
+                  value=1216, label="Height"),
         gr.Slider(minimum=-1, maximum=2**32 - 1,
-                  step=1, value=-1, label="Seed"),
-        gr.Slider(minimum=0.1, maximum=20.0, step=0.1,
+                  step=1, value=1337, label="Seed"),
+        gr.Slider(minimum=0, maximum=20.0, step=0.1,
                   value=4, label="Guidance Scale"),
         gr.Slider(minimum=1, maximum=200, step=1,
                   value=30, label="Inference Steps"),
         gr.Dropdown(choices=list(lora_options.keys()),
                     label="LoRA Weights", value=list(lora_options.keys())[-1]),
-        gr.Slider(minimum=0.0, maximum=2.0, step=0.1,
-                  value=1.0, label="LoRA Scale"),
+        # gr.Slider(minimum=0.0, maximum=2.0, step=0.1,
+        #           value=1.0, label="LoRA Scale"),
     ],
     outputs=gr.Image(label="Generated Image"),
-    title="Cat Maid Generator: LoRA Swap Edition",
+    title="HiDream Demo: LoRA Swap Edition",
     description=f"Now with dynamic LoRA switching. Currently using base model: `{model_id}`.",
 )
 
