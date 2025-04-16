@@ -27,7 +27,9 @@ lora_options = {
     # "anime 400 run4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run04/pytorch_lora_weights.safetensors",
     # "nai artist run5": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run05-nai4/pytorch_lora_weights.safetensors",
     # "run06-nai4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run06-nai4/pytorch_lora_weights.safetensors",
-    "run07-higherlr-n4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run07-nai4-longer-higherlr/checkpoint-1200/ema/ema_model.safetensors",}
+    "run07-higherlr-n4": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run07-nai4-longer-higherlr/checkpoint-1200/ema/ema_model.safetensors",
+    "run08-continue-s25": "/local/yada/apps/SimpleTuner-a/output/models-hidream-run08-continue-from-07/checkpoint-2500/ema/ema_model.safetensors",
+    }
 
 save_dir = "output/gradio_3".rstrip('/')
 
@@ -37,16 +39,8 @@ text_encoder_4 = LlamaForCausalLM.from_pretrained(
 transformer = HiDreamImageTransformer2DModel.from_pretrained(
     model_id, torch_dtype=torch.bfloat16, subfolder="transformer")
 
-pipeline = HiDreamImagePipeline.from_pretrained(
-    model_id,
-    torch_dtype=torch.bfloat16,
-    tokenizer_4=tokenizer_4,
-    text_encoder_4=text_encoder_4,
-    transformer=transformer,
-)
 
-pipeline.to('cuda' if torch.cuda.is_available()
-            else 'mps' if torch.backends.mps.is_available() else 'cpu')
+
 
 
 def unload_pipeline_model():
@@ -97,6 +91,12 @@ def apply_lora_if_needed(new_lora_path, lora_scale=1.0):
     pipeline.lora_scale = lora_scale
     pipeline.to("cuda")  # or whichever device
     current_lora_path = new_lora_path
+
+pipeline = None
+# Preload the default LoRA at startup
+default_lora_key = list(lora_options.keys())[-1]
+apply_lora_if_needed(lora_options[default_lora_key])
+current_lora_path = lora_options[default_lora_key]
 
 
 # --- Image Generation ---
