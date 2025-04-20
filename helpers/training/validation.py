@@ -9,6 +9,10 @@ from tqdm import tqdm
 from helpers.training.wrappers import unwrap_model
 from helpers.models.common import VideoModelFoundation, ImageModelFoundation
 from helpers.models.common import ModelFoundation
+try:
+    import pillow_jxl
+except ModuleNotFoundError:
+    pass
 from PIL import Image
 from helpers.training.state_tracker import StateTracker
 from helpers.models.common import PredictionTypes, PipelineTypes
@@ -861,8 +865,10 @@ class Validation:
         if self.validation_image_inputs:
             # Override the pipeline inputs to be entirely based upon the validation image inputs.
             _content = self.validation_image_inputs
-            # Resize validation input to 64px area
-            _content = resize_validation_images(_content, 64)
+            if "DeepFloyd" in self.model.NAME:
+                resize_edge_length = 64
+                # Resize validation input to 64px area
+                _content = resize_validation_images(_content, resize_edge_length)
             total_samples = len(_content) if _content is not None else 0
 
         logger.debug(f"Processing content: {_content}")
@@ -904,6 +910,8 @@ class Validation:
             self._log_validations_to_trackers(validation_images)
         except Exception as e:
             logger.error(f"Error logging validation images: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def get_eval_result(self):
         return self.evaluation_result or {}
@@ -944,7 +952,7 @@ class Validation:
     ):
         """Generate validation images for a single prompt."""
         # Placeholder for actual image generation and logging
-        logger.debug(f"Validating prompt: {prompt}")
+        logger.debug(f"Validating ({validation_shortname}) prompt: {prompt}")
         # benchmarked / stitched validation images
         stitched_validation_images = {}
         # untouched / un-stitched validation images
@@ -1179,9 +1187,20 @@ class Validation:
                     validation_image_results
                 )
                 if self.config.use_ema:
-                    ema_validation_images[validation_shortname].extend(
-                        ema_image_results
-                    )
+                    if (
+                        validation_shortname in ema_validation_images
+                        and ema_image_results is not None
+                    ):
+                        if ema_validation_images[validation_shortname] is None:
+                            # init the value
+                            ema_validation_images[validation_shortname] = []
+                        if isinstance(
+                            ema_validation_images[validation_shortname], list
+                        ):
+                            # if we have a list of images, we can stitch them.
+                            ema_validation_images[validation_shortname].extend(
+                                ema_image_results
+                            )
 
             except Exception as e:
                 import traceback
@@ -1336,6 +1355,9 @@ class Validation:
                             f"Prompt {prompt_shortname} has {len(image_list)} images"
                         )
                         for idx, image in enumerate(image_list):
+                            # if it's a list of images, make a grid
+                            if isinstance(image, list) and isinstance(image[0], Image.Image):
+                                image = image[0]
                             wandb_image = wandb.Image(
                                 image,
                                 caption=f"{prompt_shortname} - {resolution_list[idx]}",

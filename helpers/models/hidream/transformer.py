@@ -193,6 +193,7 @@ class OutEmbed(nn.Module):
         x = self.linear(x)
         return x
 
+
 USE_FLASH_ATTN3 = False
 USE_FLASH_ATTN2 = False
 USE_TORCH_SDPA = False
@@ -204,22 +205,24 @@ except:
     try:
         print(f"HiDream: FlashAttention3 not found, trying FlashAttention2")
         from flash_attn import flash_attn_func
+
         USE_FLASH_ATTN2 = True
 
     except Exception as e:
-        print(f"HiDream: FlashAttention2 failed to load ({e}), falling back to Torch SDPA.")
+        print(
+            f"HiDream: FlashAttention2 failed to load ({e}), falling back to Torch SDPA."
+        )
         USE_TORCH_SDPA = True
 
-        def flash_attn_func(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False):
-            q = query.transpose(1, 2)  
-            k = key.transpose(1, 2)    
+        def flash_attn_func(
+            query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False
+        ):
+            q = query.transpose(1, 2)
+            k = key.transpose(1, 2)
             v = value.transpose(1, 2)
-            
+
             hidden_states = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, 
-                attn_mask=attn_mask,
-                dropout_p=dropout_p,
-                is_causal=is_causal
+                q, k, v, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal
             )
             hidden_states = hidden_states.transpose(1, 2)
             return hidden_states
@@ -394,7 +397,7 @@ class HiDreamAttnProcessor_flashattn:
             return hidden_states
 
 
-class FeedForwardSwiGLU(nn.Module):
+class FeedForward(nn.Module):
     def __init__(
         self,
         dim: int,
@@ -550,7 +553,7 @@ class MoEGate(nn.Module):
 
 
 # Modified from https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py
-class MOEFeedForwardSwiGLU(nn.Module):
+class MOEFeedForward(nn.Module):
     def __init__(
         self,
         dim: int,
@@ -560,9 +563,9 @@ class MOEFeedForwardSwiGLU(nn.Module):
         aux_loss_alpha: float = 0.01,
     ):
         super().__init__()
-        self.shared_experts = FeedForwardSwiGLU(dim, hidden_dim // 2)
+        self.shared_experts = FeedForward(dim, hidden_dim // 2)
         self.experts = nn.ModuleList(
-            [FeedForwardSwiGLU(dim, hidden_dim) for i in range(num_routed_experts)]
+            [FeedForward(dim, hidden_dim) for i in range(num_routed_experts)]
         )
         self.gate = MoEGate(
             embed_dim=dim,
@@ -672,7 +675,7 @@ class HiDreamImageSingleTransformerBlock(nn.Module):
         # 3. Feed-forward
         self.norm3_i = nn.LayerNorm(dim, eps=1e-06, elementwise_affine=False)
         if num_routed_experts > 0:
-            self.ff_i = MOEFeedForwardSwiGLU(
+            self.ff_i = MOEFeedForward(
                 dim=dim,
                 hidden_dim=4 * dim,
                 num_routed_experts=num_routed_experts,
@@ -680,7 +683,7 @@ class HiDreamImageSingleTransformerBlock(nn.Module):
                 aux_loss_alpha=aux_loss_alpha,
             )
         else:
-            self.ff_i = FeedForwardSwiGLU(dim=dim, hidden_dim=4 * dim)
+            self.ff_i = FeedForward(dim=dim, hidden_dim=4 * dim)
 
     def forward(
         self,
@@ -746,16 +749,16 @@ class HiDreamImageTransformerBlock(nn.Module):
         # 3. Feed-forward
         self.norm3_i = nn.LayerNorm(dim, eps=1e-06, elementwise_affine=False)
         if num_routed_experts > 0:
-            self.ff_i = MOEFeedForwardSwiGLU(
+            self.ff_i = MOEFeedForward(
                 dim=dim,
                 hidden_dim=4 * dim,
                 num_routed_experts=num_routed_experts,
                 num_activated_experts=num_activated_experts,
             )
         else:
-            self.ff_i = FeedForwardSwiGLU(dim=dim, hidden_dim=4 * dim)
+            self.ff_i = FeedForward(dim=dim, hidden_dim=4 * dim)
         self.norm3_t = nn.LayerNorm(dim, eps=1e-06, elementwise_affine=False)
-        self.ff_t = FeedForwardSwiGLU(dim=dim, hidden_dim=4 * dim)
+        self.ff_t = FeedForward(dim=dim, hidden_dim=4 * dim)
 
     def forward(
         self,
@@ -955,8 +958,8 @@ class HiDreamImageTransformer2DModel(
             (
                 HiDreamImageBlock,
                 Attention,
-                FeedForwardSwiGLU,
-                MOEFeedForwardSwiGLU,
+                FeedForward,
+                MOEFeedForward,
             ),
         ):
             if hasattr(module, "gradient_checkpointing"):

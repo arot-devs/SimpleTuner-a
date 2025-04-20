@@ -5,6 +5,7 @@ import random
 import logging
 import inspect
 import os
+from torchvision import transforms
 from diffusers import DiffusionPipeline
 from torch.distributions import Beta
 from helpers.training.wrappers import unwrap_model
@@ -179,6 +180,24 @@ class ModelFoundation(ABC):
             "model_predict must be implemented in the child class."
         )
 
+    def controlnet_init(self):
+        """
+        Initialize the controlnet model.
+        This is a stub and should be implemented in subclasses.
+        """
+        raise NotImplementedError(
+            "controlnet_init must be implemented in the child class."
+        )
+
+    def controlnet_predict(self, prepared_batch, custom_timesteps: list = None):
+        """
+        Run a forward pass on the model.
+        Must be implemented by the subclass.
+        """
+        raise NotImplementedError(
+            "model_predict must be implemented in the child class."
+        )
+
     @abstractmethod
     def _encode_prompts(self, prompts: list, is_negative_prompt: bool = False):
         """
@@ -232,10 +251,16 @@ class ModelFoundation(ABC):
         """
         return list(cls.HUGGINGFACE_PATHS.keys())
 
-    def get_transforms(self):
+    def get_transforms(self, dataset_type: str = "image"):
         """
         Returns nothing, but subclasses can implement different torchvision transforms as needed.
+
+        dataset_type is passed in for models that support transforming videos or images etc.
         """
+        if dataset_type in ["video"]:
+            raise ValueError(
+                f"{dataset_type} transforms are not supported by {self.NAME}."
+            )
         return transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -366,6 +391,8 @@ class ModelFoundation(ABC):
         )
 
     def unwrap_model(self, model=None):
+        if self.config.controlnet and model is None:
+            return unwrap_model(self.accelerator, self.controlnet)
         return unwrap_model(self.accelerator, model or self.model)
 
     def move_extra_models(self, target_device):
@@ -382,6 +409,8 @@ class ModelFoundation(ABC):
         """
         if self.model is not None:
             self.model.to(target_device)
+        if self.controlnet is not None:
+            self.controlnet.to(target_device)
         if self.vae is not None and self.vae.device != "meta":
             self.vae.to(target_device)
         if self.text_encoders is not None:
@@ -581,6 +610,20 @@ class ModelFoundation(ABC):
                     or "",
                     **extra_kwargs,
                 )
+                if text_encoder.__class__.__name__ in [
+                    "UMT5EncoderModel",
+                    "T5EncoderModel",
+                ]:
+                    # maybe the user enabled NovelAI T5.
+                    # if self.config.t5_encoder_implementation == "novelai":
+                    #     from helpers.models.t5 import NovelAIT5EncoderModel
+
+                    #     logger.info(
+                    #         f"Converting {text_encoder.__class__.__name__} to NovelAI T5 implementation.."
+                    #     )
+                    #     text_encoder = NovelAIT5EncoderModel.from_hf_model(text_encoder)
+                    pass
+
                 if move_to_device and getattr(
                     self.config, f"{attr_name}_precision", None
                 ) in ["no_change", None]:
@@ -634,8 +677,9 @@ class ModelFoundation(ABC):
         loader_fn = self.MODEL_CLASS.from_pretrained
         model_path = (
             self.config.pretrained_transformer_model_name_or_path
-            or self.config.pretrained_model_name_or_path
-        )
+            if self.MODEL_TYPE is ModelTypes.TRANSFORMER
+            else self.config.pretrained_unet_model_name_or_path
+        ) or self.config.pretrained_model_name_or_path
         if self.config.pretrained_model_name_or_path.endswith(".safetensors"):
             self.config.pretrained_model_name_or_path = get_model_config_path(
                 self.config.model_family, model_path
@@ -643,9 +687,33 @@ class ModelFoundation(ABC):
         if model_path.endswith(".safetensors"):
             loader_fn = self.MODEL_CLASS.from_single_file
         pretrained_load_args = self.pretrained_load_args(pretrained_load_args)
+        model_subfolder = self.MODEL_SUBFOLDER
+        if (
+            self.MODEL_TYPE is ModelTypes.TRANSFORMER
+            and self.config.pretrained_transformer_model_name_or_path == model_path
+        ):
+            # we're using a custom transformer, let's check its subfolder
+            if str(self.config.pretrained_transformer_subfolder).lower() == "none":
+                model_subfolder = None
+            elif str(self.config.pretrained_unet_model_name_or_path).lower() is None:
+                model_subfolder = self.MODEL_SUBFOLDER
+            else:
+                model_subfolder = self.config.pretrained_transformer_subfolder
+        elif (
+            self.MODEL_TYPE is ModelTypes.UNET
+            and self.config.pretrained_unet_model_name_or_path == model_path
+        ):
+            # we're using a custom transformer, let's check its subfolder
+            if str(self.config.pretrained_unet_model_name_or_path).lower() == "none":
+                model_subfolder = None
+            elif str(self.config.pretrained_unet_model_name_or_path).lower() is None:
+                model_subfolder = self.MODEL_SUBFOLDER
+            else:
+                model_subfolder = self.config.pretrained_unet_subfolder
+
         self.model = loader_fn(
             model_path,
-            subfolder=self.MODEL_SUBFOLDER,
+            subfolder=model_subfolder,
             **pretrained_load_args,
         )
         if move_to_device and self.model is not None:
@@ -695,7 +763,10 @@ class ModelFoundation(ABC):
 
     def set_prepared_model(self, model):
         # after accelerate prepare, we'll set the model again.
-        self.model = model
+        if self.config.controlnet:
+            self.controlnet = model
+        else:
+            self.model = model
 
     def freeze_components(self):
         # Freeze vae and text_encoders
@@ -709,7 +780,7 @@ class ModelFoundation(ABC):
                 self.model.requires_grad_(False)
 
     def get_trained_component(self):
-        return self.model
+        return self.unwrap_model()
 
     def _load_pipeline(
         self, pipeline_type: str = PipelineTypes.TEXT2IMG, load_base_model: bool = True
@@ -718,9 +789,10 @@ class ModelFoundation(ABC):
         Loads the pipeline class for the model.
         This is a stub and should be implemented in subclasses.
         """
-        active_pipelines = getattr(self, "pipelines", {})
-        if pipeline_type in active_pipelines:
-            return active_pipelines[pipeline_type]
+        # active_pipelines = getattr(self, "pipelines", {})
+        # if pipeline_type in active_pipelines:
+        #     setattr(active_pipelines[pipeline_type], self.MODEL_TYPE.value, self.unwrap_model())
+        #     return active_pipelines[pipeline_type]
         pipeline_kwargs = {
             "pretrained_model_name_or_path": self._model_config_path(),
         }
@@ -741,14 +813,12 @@ class ModelFoundation(ABC):
         if "watermark" in signature.parameters:
             pipeline_kwargs["watermark"] = None
         if load_base_model:
-            pipeline_kwargs[self.MODEL_TYPE.value] = unwrap_model(
-                self.accelerator, self.model
-            )
+            pipeline_kwargs[self.MODEL_TYPE.value] = self.unwrap_model()
         else:
             pipeline_kwargs[self.MODEL_TYPE.value] = None
 
         if getattr(self, "vae", None) is not None:
-            pipeline_kwargs["vae"] = unwrap_model(self.accelerator, self.vae)
+            pipeline_kwargs["vae"] = self.unwrap_model(self.vae)
         elif getattr(self, "AUTOENCODER_CLASS", None) is not None:
             pipeline_kwargs["vae"] = self.get_vae()
 
@@ -761,8 +831,8 @@ class ModelFoundation(ABC):
                 self.text_encoders is not None
                 and len(self.text_encoders) >= text_encoder_idx
             ):
-                pipeline_kwargs[text_encoder_attr] = unwrap_model(
-                    self.accelerator, self.text_encoders[text_encoder_idx]
+                pipeline_kwargs[text_encoder_attr] = self.unwrap_model(
+                    self.text_encoders[text_encoder_idx]
                 )
                 pipeline_kwargs[
                     text_encoder_attr.replace("text_encoder", "tokenizer")
@@ -772,7 +842,9 @@ class ModelFoundation(ABC):
             text_encoder_idx += 1
 
         if self.config.controlnet:
-            pipeline_kwargs["controlnet"] = unwrap_model(self.accelerator, self.model)
+            pipeline_kwargs["controlnet"] = self.unwrap_model(
+                self.get_trained_component()
+            )
 
         logger.debug(
             f"Initialising {pipeline_class.__name__} with components: {pipeline_kwargs}"
@@ -799,10 +871,13 @@ class ModelFoundation(ABC):
                 text_encoder_config,
             ) in self.TEXT_ENCODER_CONFIGURATION.items():
                 if getattr(possibly_cached_pipeline, text_encoder_attr, None) is None:
+                    text_encoder_attr_number = 1
+                    if "encoder_" in text_encoder_attr:
+                        text_encoder_attr_number = text_encoder_attr.split("_")[-1]
                     setattr(
                         possibly_cached_pipeline,
                         text_encoder_attr,
-                        self.text_encoders[int(text_encoder_attr.split("_")[-1]) - 1],
+                        self.text_encoders[int(text_encoder_attr_number) - 1],
                     )
         if self.config.controlnet:
             if getattr(possibly_cached_pipeline, "controlnet", None) is None:
@@ -865,7 +940,10 @@ class ModelFoundation(ABC):
         Depending on the noise schedule prediction type or flow-matching settings,
         the target is computed differently.
         """
-        if self.PREDICTION_TYPE is PredictionTypes.FLOW_MATCHING:
+        if prepared_batch.get("target") is not None:
+            # Parent-student training
+            target = prepared_batch["target"]
+        elif self.PREDICTION_TYPE is PredictionTypes.FLOW_MATCHING:
             target = prepared_batch["noise"] - prepared_batch["latents"]
         elif self.PREDICTION_TYPE is PredictionTypes.EPSILON:
             target = prepared_batch["noise"]
@@ -1147,6 +1225,7 @@ class ImageModelFoundation(ModelFoundation):
         # These will be set by your loading methods
         self.vae = None
         self.model = None
+        self.controlnet = None
         self.text_encoders = None
         self.tokenizers = None
 
@@ -1169,7 +1248,7 @@ class ImageModelFoundation(ModelFoundation):
     def add_lora_adapter(self):
         target_modules = self.get_lora_target_layers()
         addkeys, misskeys = [], []
-        lora_config = LoraConfig(
+        self.lora_config = LoraConfig(
             r=self.config.lora_rank,
             lora_alpha=(
                 self.config.lora_alpha
@@ -1181,7 +1260,7 @@ class ImageModelFoundation(ModelFoundation):
             target_modules=target_modules,
             use_dora=self.config.use_dora,
         )
-        self.model.add_adapter(lora_config)
+        self.model.add_adapter(self.lora_config)
         if self.config.init_lora:
             addkeys, misskeys = load_lora_weights(
                 {self.MODEL_TYPE: self.model},
@@ -1256,12 +1335,10 @@ class VideoModelFoundation(ImageModelFoundation):
         # }
         # The trainer or child class might call self._init_text_encoders() at the right time.
 
-    def get_transforms(self):
-        from torchvision import transforms
-
+    def get_transforms(self, dataset_type: str = "image"):
         return transforms.Compose(
             [
-                VideoToTensor(),
+                VideoToTensor() if dataset_type == "video" else transforms.ToTensor(),
             ]
         )
 
