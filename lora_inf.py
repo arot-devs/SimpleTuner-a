@@ -19,7 +19,7 @@ from transformers import PreTrainedTokenizerFast, LlamaForCausalLM
 from lycoris import create_lycoris_from_weights
 
 # Load base model components
-llama_repo = "/local/yada/apps/HiDream-I1-a/Meta-Llama-3.1-8B-Instruct"
+llama_repo = "/local/yada/models/Meta-Llama-3.1-8B-Instruct"
 model_id = "HiDream-ai/HiDream-I1-Full"
 
 # --- LoRA setup ---
